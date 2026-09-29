@@ -13,6 +13,8 @@ enum OrderStatus {
   PENDING = 0;
   DELIVERED = 1;
   CANCELLED = 2;
+  AWAITING_VALIDATION = 3; // order saga: waiting for products-ms
+  REJECTED = 4;            // order saga: invalid products or validation timed out
 }
 
 message OrderById {
@@ -50,13 +52,15 @@ message Order {
   string createdAt = 7;
   string updatedAt = 8;
   repeated OrderItemDetail items = 9;
+  optional string rejectionReason = 10;
 }
 
+// price and name are set once products-ms validates the order
 message OrderItemDetail {
   int32 productId = 1;
   int32 quantity = 2;
-  double price = 3;
-  string name = 4;
+  optional double price = 3;
+  optional string name = 4;
 }
 
 message PaginationMeta {

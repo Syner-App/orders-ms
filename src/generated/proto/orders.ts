@@ -14,6 +14,10 @@ export enum OrderStatus {
   PENDING = "PENDING",
   DELIVERED = "DELIVERED",
   CANCELLED = "CANCELLED",
+  /** AWAITING_VALIDATION - order saga: waiting for products-ms */
+  AWAITING_VALIDATION = "AWAITING_VALIDATION",
+  /** REJECTED - order saga: invalid products or validation timed out */
+  REJECTED = "REJECTED",
   UNRECOGNIZED = "UNRECOGNIZED",
 }
 
@@ -51,13 +55,15 @@ export interface Order {
   createdAt: string;
   updatedAt: string;
   items: OrderItemDetail[];
+  rejectionReason?: string | undefined;
 }
 
+/** price and name are set once products-ms validates the order */
 export interface OrderItemDetail {
   productId: number;
   quantity: number;
-  price: number;
-  name: string;
+  price?: number | undefined;
+  name?: string | undefined;
 }
 
 export interface PaginationMeta {

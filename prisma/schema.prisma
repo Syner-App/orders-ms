@@ -14,9 +14,11 @@ datasource db {
 }
 
 enum OrderStatus {
+  AWAITING_VALIDATION // order saga: waiting for products-ms
   PENDING
   DELIVERED
   CANCELLED
+  REJECTED // order saga: products-ms rejected it or validation timed out
 }
 
 model Order {
@@ -29,18 +31,38 @@ model Order {
 
   paidAt DateTime?
 
+  rejectionReason String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   OrderItem OrderItem[]
+
+  @@index([status, createdAt])
 }
 
 model OrderItem {
   id        String @id @default(uuid())
   productId Int
   quantity  Int
-  price     Float
+  // Snapshot of the product when the saga validated the order (null until then)
+  price     Float?
+  name      String?
 
   order   Order?  @relation(fields: [orderId], references: [id])
   orderId String?
+}
+
+// Transactional outbox: events are written with the business change and
+// published to RabbitMQ by OutboxRelay
+model OutboxEvent {
+  id          Int       @id @default(autoincrement())
+  pattern     String
+  payload     Json
+  attempts    Int       @default(0)
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+
+  @@index([publishedAt, id])
 }
