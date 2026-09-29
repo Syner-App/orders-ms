@@ -63,7 +63,6 @@ postgres/
 
 .agents/
 .claude/
-skills-lock.json
 
 # Engram: keep project config, ignore local sync chunks
 .engram/*
