@@ -2,65 +2,56 @@ syntax = "proto3";
 
 package orders;
 
-service OrdersService {
-  rpc Create (CreateOrderRequest) returns (Order);
-  rpc FindAll (OrderPaginationRequest) returns (OrderList);
-  rpc FindOne (OrderById) returns (Order);
-  rpc ChangeOrderStatus (ChangeOrderStatusRequest) returns (Order);
+// Field names are snake_case end to end (proto-loader keepCase + ts-proto
+// snakeToCamel=false) so they match the Prisma columns
+service PurchaseOrdersService {
+  rpc Create (CreatePurchaseOrderRequest) returns (PurchaseOrder);
+  rpc FindAll (PurchaseOrderPaginationRequest) returns (PurchaseOrderList);
+  rpc FindOne (PurchaseOrderById) returns (PurchaseOrder);
+  rpc UpdateStatus (UpdatePurchaseOrderStatusRequest) returns (PurchaseOrder);
 }
 
-enum OrderStatus {
-  PENDING = 0;
-  DELIVERED = 1;
-  CANCELLED = 2;
-  AWAITING_VALIDATION = 3; // order saga: waiting for products-ms
-  REJECTED = 4;            // order saga: invalid products or validation timed out
+enum StatusPurchaseOrder {
+  EN_VALIDACION = 0; // purchase order saga: waiting for products-ms
+  PENDIENTE = 1;
+  APROBADA = 2;
+  RECHAZADA = 3;
+  RECIBIDA = 4;
 }
 
-message OrderById {
+message PurchaseOrderById {
   string id = 1;
 }
 
-message OrderItem {
-  int32 productId = 1;
-  int32 quantity = 2;
-  reserved 3;
+message CreatePurchaseOrderRequest {
+  int32 producto_id = 1;
+  string proveedor = 2;
+  int32 cantidad_solicitada = 3;
+  optional string motivo = 4;
 }
 
-message CreateOrderRequest {
-  repeated OrderItem items = 1;
-}
-
-message OrderPaginationRequest {
+message PurchaseOrderPaginationRequest {
   optional int32 page = 1;
   optional int32 limit = 2;
-  optional OrderStatus status = 3;
+  optional StatusPurchaseOrder estado = 3;
 }
 
-message ChangeOrderStatusRequest {
+// Only APROBADA, RECHAZADA (motivo required) and RECIBIDA can be requested
+message UpdatePurchaseOrderStatusRequest {
   string id = 1;
-  OrderStatus status = 2;
+  StatusPurchaseOrder estado = 2;
+  optional string motivo = 3;
 }
 
-message Order {
+message PurchaseOrder {
   string id = 1;
-  double totalAmount = 2;
-  int32 totalItems = 3;
-  OrderStatus status = 4;
-  bool paid = 5;
-  optional string paidAt = 6;
+  StatusPurchaseOrder estado = 2;
+  string proveedor = 3;
+  int32 cantidad_solicitada = 4;
+  optional string motivo = 5;
+  int32 producto_id = 6;
   string createdAt = 7;
-  string updatedAt = 8;
-  repeated OrderItemDetail items = 9;
-  optional string rejectionReason = 10;
-}
-
-// price and name are set once products-ms validates the order
-message OrderItemDetail {
-  int32 productId = 1;
-  int32 quantity = 2;
-  optional double price = 3;
-  optional string name = 4;
+  optional string updatedAt = 8;
 }
 
 message PaginationMeta {
@@ -69,7 +60,7 @@ message PaginationMeta {
   int32 lastPage = 3;
 }
 
-message OrderList {
-  repeated Order data = 1;
+message PurchaseOrderList {
+  repeated PurchaseOrder data = 1;
   PaginationMeta meta = 2;
 }

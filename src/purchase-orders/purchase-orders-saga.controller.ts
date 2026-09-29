@@ -1,34 +1,34 @@
 import { Controller, Logger } from '@nestjs/common';
 import { Ctx, EventPattern, Payload, RmqContext, Transport } from '@nestjs/microservices';
 import type { ClassConstructor } from 'class-transformer';
-import { OrdersService } from './orders.service.js';
+import { PurchaseOrdersService } from './purchase-orders.service.ts';
 import {
-  OrderEvents,
-  OrderProductsRejectedEvent,
-  OrderProductsValidatedEvent,
   parseEvent,
+  PurchaseOrderEvents,
+  PurchaseOrderProductRejectedEvent,
+  PurchaseOrderProductValidatedEvent,
   rmqMessage,
 } from '../common/index.ts';
 
-// Order saga replies from products-ms. Handlers are idempotent, so a
+// Purchase order saga replies from products-ms. Handlers are idempotent, so a
 // redelivered message is simply acked again
 @Controller()
-export class OrdersSagaController {
-  private readonly logger = new Logger(OrdersSagaController.name);
+export class PurchaseOrdersSagaController {
+  private readonly logger = new Logger(PurchaseOrdersSagaController.name);
 
-  constructor(private readonly ordersService: OrdersService) { }
+  constructor(private readonly purchaseOrdersService: PurchaseOrdersService) { }
 
   // <string> selects the untyped overload; the typed one forbids a typed @Ctx() argument
-  @EventPattern<string>(OrderEvents.ProductsValidated, Transport.RMQ)
-  handleProductsValidated(@Payload() payload: unknown, @Ctx() context: RmqContext) {
-    return this.process(OrderEvents.ProductsValidated, OrderProductsValidatedEvent, payload, context,
-      (event) => this.ordersService.confirmValidatedOrder(event));
+  @EventPattern<string>(PurchaseOrderEvents.ProductValidated, Transport.RMQ)
+  handleProductValidated(@Payload() payload: unknown, @Ctx() context: RmqContext) {
+    return this.process(PurchaseOrderEvents.ProductValidated, PurchaseOrderProductValidatedEvent, payload, context,
+      (event) => this.purchaseOrdersService.confirmValidatedOrder(event));
   }
 
-  @EventPattern<string>(OrderEvents.ProductsRejected, Transport.RMQ)
-  handleProductsRejected(@Payload() payload: unknown, @Ctx() context: RmqContext) {
-    return this.process(OrderEvents.ProductsRejected, OrderProductsRejectedEvent, payload, context,
-      (event) => this.ordersService.rejectOrder(event));
+  @EventPattern<string>(PurchaseOrderEvents.ProductRejected, Transport.RMQ)
+  handleProductRejected(@Payload() payload: unknown, @Ctx() context: RmqContext) {
+    return this.process(PurchaseOrderEvents.ProductRejected, PurchaseOrderProductRejectedEvent, payload, context,
+      (event) => this.purchaseOrdersService.rejectOrder(event));
   }
 
   // Invalid payloads and processing errors are dead-lettered (orders.saga-replies.dlq)

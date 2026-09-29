@@ -13,44 +13,29 @@ datasource db {
   provider = "postgresql"
 }
 
-enum OrderStatus {
-  AWAITING_VALIDATION // order saga: waiting for products-ms
-  PENDING
-  DELIVERED
-  CANCELLED
-  REJECTED // order saga: products-ms rejected it or validation timed out
+enum StatusPurchaseOrder {
+  EN_VALIDACION // purchase order saga: waiting for products-ms to validate the product
+  PENDIENTE
+  APROBADA
+  RECHAZADA // manual rejection, invalid product or validation timed out (see motivo)
+  RECIBIDA
 }
 
-model Order {
-  id          String @id @default(uuid())
-  totalAmount Float
-  totalItems  Int
+// producto_id points to products-ms (another database), so it has no @relation:
+// the purchase order saga validates it
+model PurchaseOrder {
+  id                  String              @id @default(uuid())
+  estado              StatusPurchaseOrder @default(EN_VALIDACION)
+  proveedor           String              @db.VarChar
+  cantidad_solicitada Int                 @db.Integer
 
-  status OrderStatus @default(PENDING)
-  paid   Boolean     @default(false)
+  motivo      String?   @db.VarChar
+  createdAt   DateTime  @default(now()) @db.Timestamp
+  updatedAt   DateTime? @updatedAt @db.Timestamp
+  producto_id Int
 
-  paidAt DateTime?
-
-  rejectionReason String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  OrderItem OrderItem[]
-
-  @@index([status, createdAt])
-}
-
-model OrderItem {
-  id        String @id @default(uuid())
-  productId Int
-  quantity  Int
-  // Snapshot of the product when the saga validated the order (null until then)
-  price     Float?
-  name      String?
-
-  order   Order?  @relation(fields: [orderId], references: [id])
-  orderId String?
+  @@index([estado, createdAt])
+  @@map("ordenes_compra")
 }
 
 // Transactional outbox: events are written with the business change and

@@ -10,60 +10,49 @@ import { Observable } from "rxjs";
 
 export const protobufPackage = "orders";
 
-export enum OrderStatus {
-  PENDING = "PENDING",
-  DELIVERED = "DELIVERED",
-  CANCELLED = "CANCELLED",
-  /** AWAITING_VALIDATION - order saga: waiting for products-ms */
-  AWAITING_VALIDATION = "AWAITING_VALIDATION",
-  /** REJECTED - order saga: invalid products or validation timed out */
-  REJECTED = "REJECTED",
+export enum StatusPurchaseOrder {
+  /** EN_VALIDACION - purchase order saga: waiting for products-ms */
+  EN_VALIDACION = "EN_VALIDACION",
+  PENDIENTE = "PENDIENTE",
+  APROBADA = "APROBADA",
+  RECHAZADA = "RECHAZADA",
+  RECIBIDA = "RECIBIDA",
   UNRECOGNIZED = "UNRECOGNIZED",
 }
 
-export interface OrderById {
+export interface PurchaseOrderById {
   id: string;
 }
 
-export interface OrderItem {
-  productId: number;
-  quantity: number;
+export interface CreatePurchaseOrderRequest {
+  producto_id: number;
+  proveedor: string;
+  cantidad_solicitada: number;
+  motivo?: string | undefined;
 }
 
-export interface CreateOrderRequest {
-  items: OrderItem[];
-}
-
-export interface OrderPaginationRequest {
+export interface PurchaseOrderPaginationRequest {
   page?: number | undefined;
   limit?: number | undefined;
-  status?: OrderStatus | undefined;
+  estado?: StatusPurchaseOrder | undefined;
 }
 
-export interface ChangeOrderStatusRequest {
+/** Only APROBADA, RECHAZADA (motivo required) and RECIBIDA can be requested */
+export interface UpdatePurchaseOrderStatusRequest {
   id: string;
-  status: OrderStatus;
+  estado: StatusPurchaseOrder;
+  motivo?: string | undefined;
 }
 
-export interface Order {
+export interface PurchaseOrder {
   id: string;
-  totalAmount: number;
-  totalItems: number;
-  status: OrderStatus;
-  paid: boolean;
-  paidAt?: string | undefined;
+  estado: StatusPurchaseOrder;
+  proveedor: string;
+  cantidad_solicitada: number;
+  motivo?: string | undefined;
+  producto_id: number;
   createdAt: string;
-  updatedAt: string;
-  items: OrderItemDetail[];
-  rejectionReason?: string | undefined;
-}
-
-/** price and name are set once products-ms validates the order */
-export interface OrderItemDetail {
-  productId: number;
-  quantity: number;
-  price?: number | undefined;
-  name?: string | undefined;
+  updatedAt?: string | undefined;
 }
 
 export interface PaginationMeta {
@@ -72,48 +61,62 @@ export interface PaginationMeta {
   lastPage: number;
 }
 
-export interface OrderList {
-  data: Order[];
+export interface PurchaseOrderList {
+  data: PurchaseOrder[];
   meta: PaginationMeta | undefined;
 }
 
 export const ORDERS_PACKAGE_NAME = "orders";
 
-export interface OrdersServiceClient {
-  create(request: CreateOrderRequest): Observable<Order>;
+/**
+ * Field names are snake_case end to end (proto-loader keepCase + ts-proto
+ * snakeToCamel=false) so they match the Prisma columns
+ */
 
-  findAll(request: OrderPaginationRequest): Observable<OrderList>;
+export interface PurchaseOrdersServiceClient {
+  create(request: CreatePurchaseOrderRequest): Observable<PurchaseOrder>;
 
-  findOne(request: OrderById): Observable<Order>;
+  findAll(request: PurchaseOrderPaginationRequest): Observable<PurchaseOrderList>;
 
-  changeOrderStatus(request: ChangeOrderStatusRequest): Observable<Order>;
+  findOne(request: PurchaseOrderById): Observable<PurchaseOrder>;
+
+  updateStatus(request: UpdatePurchaseOrderStatusRequest): Observable<PurchaseOrder>;
 }
 
-export interface OrdersServiceController {
-  create(request: CreateOrderRequest): Promise<Order> | Observable<Order> | Order;
+/**
+ * Field names are snake_case end to end (proto-loader keepCase + ts-proto
+ * snakeToCamel=false) so they match the Prisma columns
+ */
 
-  findAll(request: OrderPaginationRequest): Promise<OrderList> | Observable<OrderList> | OrderList;
+export interface PurchaseOrdersServiceController {
+  create(request: CreatePurchaseOrderRequest): Promise<PurchaseOrder> | Observable<PurchaseOrder> | PurchaseOrder;
 
-  findOne(request: OrderById): Promise<Order> | Observable<Order> | Order;
+  findAll(
+    request: PurchaseOrderPaginationRequest,
+  ): Promise<PurchaseOrderList> | Observable<PurchaseOrderList> | PurchaseOrderList;
 
-  changeOrderStatus(request: ChangeOrderStatusRequest): Promise<Order> | Observable<Order> | Order;
+  findOne(request: PurchaseOrderById): Promise<PurchaseOrder> | Observable<PurchaseOrder> | PurchaseOrder;
+
+  updateStatus(
+    request: UpdatePurchaseOrderStatusRequest,
+  ): Promise<PurchaseOrder> | Observable<PurchaseOrder> | PurchaseOrder;
 }
 
-export function OrdersServiceControllerMethods() {
+export function PurchaseOrdersServiceControllerMethods() {
   return function (constructor: Function) {
-    const grpcMethods: string[] = ["create", "findAll", "findOne", "changeOrderStatus"];
+    const grpcMethods: string[] = ["create", "findAll", "findOne", "updateStatus"];
     for (const method of grpcMethods) {
       const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
-      GrpcMethod("OrdersService", method)(constructor.prototype[method], method, descriptor);
+      GrpcMethod("PurchaseOrdersService", method)(constructor.prototype[method], method, descriptor);
       Object.defineProperty(constructor.prototype, method, descriptor);
     }
     const grpcStreamMethods: string[] = [];
     for (const method of grpcStreamMethods) {
       const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
-      GrpcStreamMethod("OrdersService", method)(constructor.prototype[method], method, descriptor);
+      GrpcStreamMethod("PurchaseOrdersService", method)(constructor.prototype[method], method, descriptor);
       Object.defineProperty(constructor.prototype, method, descriptor);
     }
   };
 }
 
-export const ORDERS_SERVICE_NAME = "OrdersService";
+export const PURCHASE_ORDERS_SERVICE_NAME = "PurchaseOrdersService";

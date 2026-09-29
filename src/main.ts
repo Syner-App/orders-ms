@@ -12,7 +12,7 @@ import { PrismaExceptionFilter } from './common/index.ts';
 async function bootstrap() {
   const logger = new Logger(`Orders-Ms`)
 
-  // Hybrid app: gRPC for the gateway + RabbitMQ for the order saga (no HTTP server)
+  // Hybrid app: gRPC for the gateway + RabbitMQ for the purchase order saga (no HTTP server)
   const app = await NestFactory.create(AppModule);
 
   // Global enhancers must be registered before connectMicroservice() so
@@ -40,7 +40,8 @@ async function bootstrap() {
         package: ORDERS_PACKAGE_NAME,
         protoPath: join(import.meta.dirname, 'proto/orders.proto'),
         url: `0.0.0.0:${envs.port}`,
-        loader: { enums: String },
+        // snake_case fields and string enums, matching the Prisma models
+        loader: { keepCase: true, enums: String },
       },
     },
     { inheritAppConfig: true },

@@ -1,15 +1,15 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.ts';
-import { OrderStatus } from '../generated/prisma/enums.ts';
+import { StatusPurchaseOrder } from '../generated/prisma/enums.ts';
 import { envs } from '../config/envs.ts';
 
 export const VALIDATION_TIMEOUT_REASON = 'Product validation timed out';
 
-// Order saga timeout: rejects orders stuck in AWAITING_VALIDATION (e.g. products-ms
-// down for too long). A late validation reply is then ignored by OrdersService
+// Purchase order saga timeout: rejects orders stuck in EN_VALIDACION (e.g. products-ms
+// down for too long). A late validation reply is then ignored by PurchaseOrdersService
 @Injectable()
-export class OrderValidationTimeoutJob implements OnApplicationBootstrap, OnModuleDestroy {
-  private readonly logger = new Logger(OrderValidationTimeoutJob.name);
+export class PurchaseOrderValidationTimeoutJob implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger(PurchaseOrderValidationTimeoutJob.name);
   private timer?: NodeJS.Timeout;
   private running = false;
 
@@ -28,15 +28,15 @@ export class OrderValidationTimeoutJob implements OnApplicationBootstrap, OnModu
 
     this.running = true;
     try {
-      const { count } = await this.prisma.order.updateMany({
+      const { count } = await this.prisma.purchaseOrder.updateMany({
         where: {
-          status: OrderStatus.AWAITING_VALIDATION,
+          estado: StatusPurchaseOrder.EN_VALIDACION,
           createdAt: { lt: new Date(now.getTime() - envs.orderValidationTimeoutMs) },
         },
-        data: { status: OrderStatus.REJECTED, rejectionReason: VALIDATION_TIMEOUT_REASON },
+        data: { estado: StatusPurchaseOrder.RECHAZADA, motivo: VALIDATION_TIMEOUT_REASON },
       });
 
-      if (count) this.logger.warn(`Rejected ${count} order(s) awaiting validation for too long`);
+      if (count) this.logger.warn(`Rejected ${count} purchase order(s) awaiting validation for too long`);
       return count;
     } catch (error) {
       this.logger.error(`Saga timeout check failed: ${(error as Error)?.message ?? error}`);

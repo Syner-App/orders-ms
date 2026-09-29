@@ -1,0 +1,81 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { RmqContext } from '@nestjs/microservices';
+import { PurchaseOrdersSagaController } from './purchase-orders-saga.controller.ts';
+import { PurchaseOrdersService } from './purchase-orders.service.ts';
+import { PurchaseOrderEvents } from '../common/index.ts';
+
+const purchaseOrderId = '6f1c1c9e-2f5b-4c1a-9a47-6a2b1f3c8d10';
+
+function createContext(pattern: string) {
+  const channel = { ack: vi.fn(), nack: vi.fn() };
+  const message = { fields: { redelivered: false } };
+  return { channel, message, context: new RmqContext([message, channel, pattern]) };
+}
+
+describe('PurchaseOrdersSagaController', () => {
+  let controller: PurchaseOrdersSagaController;
+  const purchaseOrdersService = { confirmValidatedOrder: vi.fn(), rejectOrder: vi.fn() };
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [PurchaseOrdersSagaController],
+      providers: [{ provide: PurchaseOrdersService, useValue: purchaseOrdersService }],
+    }).compile();
+
+    controller = module.get(PurchaseOrdersSagaController);
+  });
+
+  it('confirms the order and acks purchase-order.product.validated', async () => {
+    purchaseOrdersService.confirmValidatedOrder.mockResolvedValue(true);
+    const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
+    const payload = { purchaseOrderId, producto_id: 1 };
+
+    await controller.handleProductValidated(payload, context);
+
+    expect(purchaseOrdersService.confirmValidatedOrder).toHaveBeenCalledWith(payload);
+    expect(channel.ack).toHaveBeenCalledWith(message);
+  });
+
+  it('acks a duplicated reply that the service ignores', async () => {
+    purchaseOrdersService.confirmValidatedOrder.mockResolvedValue(false);
+    const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
+
+    await controller.handleProductValidated({ purchaseOrderId, producto_id: 1 }, context);
+
+    expect(channel.ack).toHaveBeenCalledWith(message);
+  });
+
+  it('rejects the order and acks purchase-order.product.rejected', async () => {
+    purchaseOrdersService.rejectOrder.mockResolvedValue(true);
+    const { channel, message, context } = createContext(PurchaseOrderEvents.ProductRejected);
+
+    await controller.handleProductRejected({ purchaseOrderId, reason: 'Product #9 not found or inactive' }, context);
+
+    expect(purchaseOrdersService.rejectOrder).toHaveBeenCalledWith({
+      purchaseOrderId,
+      reason: 'Product #9 not found or inactive',
+    });
+    expect(channel.ack).toHaveBeenCalledWith(message);
+  });
+
+  it('dead-letters an invalid payload without calling the service', async () => {
+    const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
+
+    await controller.handleProductValidated({ purchaseOrderId, producto_id: 'x' }, context);
+
+    expect(purchaseOrdersService.confirmValidatedOrder).not.toHaveBeenCalled();
+    expect(channel.nack).toHaveBeenCalledWith(message, false, false);
+  });
+
+  it('dead-letters the message when processing fails', async () => {
+    purchaseOrdersService.rejectOrder.mockRejectedValue(new Error('db down'));
+    const { channel, message, context } = createContext(PurchaseOrderEvents.ProductRejected);
+
+    await controller.handleProductRejected({ purchaseOrderId, reason: 'nope' }, context);
+
+    expect(channel.ack).not.toHaveBeenCalled();
+    expect(channel.nack).toHaveBeenCalledWith(message, false, false);
+  });
+});
