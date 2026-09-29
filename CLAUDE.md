@@ -49,7 +49,7 @@ Env vars (see `.env.template`, validated with Joi in `src/config/envs.ts` at imp
 
 **Serialization quirk:** proto-loader can't serialize `Date`, so all responses go through `toPurchaseOrderResponse()` which converts `createdAt`/`updatedAt` to ISO strings and nullable columns (`motivo`, `updatedAt`) to `undefined`.
 
-**Prisma 7 setup:** generator `prisma-client` outputs to `src/generated/prisma` (gitignored). `PrismaService` (provided by the global `PrismaModule`) extends `PrismaClient` using the `@prisma/adapter-pg` driver adapter. Datasource URL comes from `prisma7.config.ts`, not the schema.
+**Prisma 7 setup:** generator `prisma-client` outputs to `src/generated/prisma` (gitignored). `PrismaService` (`src/prisma/prisma.service.ts`, no `PrismaModule`: `OutboxModule` provides and exports it, so `PurchaseOrdersModule` shares the same instance through its `OutboxModule` import) extends `PrismaClient` using the `@prisma/adapter-pg` driver adapter. Datasource URL comes from `prisma7.config.ts`, not the schema.
 
 ## Conventions
 
