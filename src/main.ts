@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.ts';
 import { envs } from './config/envs.ts';
+import { SAGA_REPLIES_QUEUE, SYNER_DLX, SYNER_EXCHANGE } from './config/services.ts';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { MicroserviceOptions, RpcException, Transport } from '@nestjs/microservices';
 import { status } from '@grpc/grpc-js';
@@ -10,16 +11,12 @@ import { PrismaExceptionFilter } from './common/index.ts';
 
 async function bootstrap() {
   const logger = new Logger(`Orders-Ms`)
-  const app = await NestFactory.createMicroservice<MicroserviceOptions>(AppModule, {
-    transport: Transport.GRPC,
-    options: {
-      package: ORDERS_PACKAGE_NAME,
-      protoPath: join(import.meta.dirname, 'proto/orders.proto'),
-      url: `0.0.0.0:${envs.port}`,
-      loader: { enums: String },
-    }
-  });
 
+  // Hybrid app: gRPC for the gateway + RabbitMQ for the order saga (no HTTP server)
+  const app = await NestFactory.create(AppModule);
+
+  // Global enhancers must be registered before connectMicroservice() so
+  // inheritAppConfig can copy them to every microservice
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -36,7 +33,46 @@ async function bootstrap() {
   )
   app.useGlobalFilters(new PrismaExceptionFilter());
 
-  await app.listen();
+  app.connectMicroservice<MicroserviceOptions>(
+    {
+      transport: Transport.GRPC,
+      options: {
+        package: ORDERS_PACKAGE_NAME,
+        protoPath: join(import.meta.dirname, 'proto/orders.proto'),
+        url: `0.0.0.0:${envs.port}`,
+        loader: { enums: String },
+      },
+    },
+    { inheritAppConfig: true },
+  );
+
+  app.connectMicroservice<MicroserviceOptions>(
+    {
+      transport: Transport.RMQ,
+      options: {
+        urls: [envs.rabbitmqUrl],
+        queue: SAGA_REPLIES_QUEUE,
+        queueOptions: {
+          durable: true,
+          arguments: {
+            'x-dead-letter-exchange': SYNER_DLX,
+            'x-dead-letter-routing-key': SAGA_REPLIES_QUEUE,
+          },
+        },
+        exchange: SYNER_EXCHANGE,
+        exchangeType: 'topic',
+        wildcards: true,
+        noAck: false,
+        prefetchCount: 10,
+      },
+    },
+    { inheritAppConfig: true },
+  );
+
+  // init() first so lifecycle hooks finish before any message is consumed
+  await app.init();
+  await app.startAllMicroservices();
   logger.log(`Orders MS (gRPC) listening on port ${envs.port}`)
+  logger.log(`Orders MS (RMQ) consuming queue ${SAGA_REPLIES_QUEUE}`)
 }
 await bootstrap();
