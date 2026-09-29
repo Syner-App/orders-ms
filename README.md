@@ -25,7 +25,7 @@ Los mensajes que no se pueden procesar terminan en `orders.saga-replies.dlq`.
 ```bash
 docker compose up -d --build   # en la raíz de syner/: todo el stack (ver ../README.md)
 # o, para correr este servicio fuera de Docker:
-docker compose stop order-ms
+docker compose stop orders-ms
 pnpm install
 cp .env.template .env       # PORT, DATABASE_URL, RABBITMQ_URL
 pnpm prisma migrate dev
