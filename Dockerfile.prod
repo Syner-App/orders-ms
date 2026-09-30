@@ -1,0 +1,53 @@
+# Production image. Build stages install every dependency (dev included) to
+# generate the Prisma client, test and compile; the runtime stage only carries
+# the production dependencies and dist/. The `migrate` target is a one-off job
+# run by syner/docker-compose.prod.yml before the service starts.
+
+# Base: Node + pnpm for the build stages
+FROM node:24-bookworm-slim AS base
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm i -g pnpm@11.1.3
+WORKDIR /app
+
+
+# Deps: every dependency, needed to build, test and run migrations
+FROM base AS deps
+# pnpm-workspace.yaml carries allowBuilds for the native build scripts
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+
+# Build: generate the Prisma client (gitignored), test and compile
+FROM deps AS build
+COPY . .
+RUN pnpm prisma generate
+# The specs import config/envs (validated with Joi at import time) and .env is
+# not in the build context, so the template provides placeholder values
+RUN cp .env.template .env && pnpm test && rm .env
+RUN pnpm build
+
+
+# Migrate: applies the pending migrations
+FROM build AS migrate
+CMD ["pnpm", "prisma", "migrate", "deploy"]
+
+
+# Prod deps: only `dependencies`
+FROM base AS prod-deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --prod --frozen-lockfile
+
+
+# Runtime (default target)
+FROM node:24-bookworm-slim AS prod
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
+# package.json carries "type": "module", so Node loads dist/ as ESM
+COPY --from=build --chown=node:node /app/package.json ./
+COPY --from=build --chown=node:node /app/dist ./dist
+USER node
+EXPOSE 3002
+CMD ["node", "dist/main.js"]
