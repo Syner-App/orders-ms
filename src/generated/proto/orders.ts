@@ -22,6 +22,7 @@ export enum StatusPurchaseOrder {
 
 export interface PurchaseOrderById {
   id: string;
+  organization_id: string;
 }
 
 export interface CreatePurchaseOrderRequest {
@@ -29,12 +30,14 @@ export interface CreatePurchaseOrderRequest {
   proveedor: string;
   cantidad_solicitada: number;
   motivo?: string | undefined;
+  organization_id: string;
 }
 
 export interface PurchaseOrderPaginationRequest {
   page?: number | undefined;
   limit?: number | undefined;
   estado?: StatusPurchaseOrder | undefined;
+  organization_id: string;
 }
 
 /** Only APROBADA, RECHAZADA (motivo required) and RECIBIDA can be requested */
@@ -42,6 +45,7 @@ export interface UpdatePurchaseOrderStatusRequest {
   id: string;
   estado: StatusPurchaseOrder;
   motivo?: string | undefined;
+  organization_id: string;
 }
 
 export interface PurchaseOrder {
@@ -70,7 +74,10 @@ export const ORDERS_PACKAGE_NAME = "orders";
 
 /**
  * Field names are snake_case end to end (proto-loader keepCase + ts-proto
- * snakeToCamel=false) so they match the Prisma columns
+ * snakeToCamel=false) so they match the Prisma columns.
+ * Every request carries organization_id: the organization of the authenticated caller,
+ * set by client-gateway from the token verified by auth-ms. Purchase orders of other
+ * organizations are never visible (a foreign id is NOT_FOUND)
  */
 
 export interface PurchaseOrdersServiceClient {
@@ -85,7 +92,10 @@ export interface PurchaseOrdersServiceClient {
 
 /**
  * Field names are snake_case end to end (proto-loader keepCase + ts-proto
- * snakeToCamel=false) so they match the Prisma columns
+ * snakeToCamel=false) so they match the Prisma columns.
+ * Every request carries organization_id: the organization of the authenticated caller,
+ * set by client-gateway from the token verified by auth-ms. Purchase orders of other
+ * organizations are never visible (a foreign id is NOT_FOUND)
  */
 
 export interface PurchaseOrdersServiceController {

@@ -39,13 +39,21 @@ export class PurchaseOrdersService {
 
   // Saga step 1: persist the order EN_VALIDACION and announce it. products-ms answers
   // asynchronously with purchase-order.product.validated / purchase-order.product.rejected
-  async create({ producto_id, proveedor, cantidad_solicitada, motivo }: CreatePurchaseOrderDto) {
-    const purchaseOrder = await this.prisma.$transaction(async (tx) => {
+  async create({ organization_id, producto_id, proveedor, cantidad_solicitada, motivo }: CreatePurchaseOrderDto) {
+    const purchaseOrder = await this.prisma.withTenant(organization_id, async (tx) => {
       const created = await tx.purchaseOrder.create({
-        data: { producto_id, proveedor, cantidad_solicitada, motivo, estado: StatusPurchaseOrder.EN_VALIDACION },
+        data: {
+          organization_id,
+          producto_id,
+          proveedor,
+          cantidad_solicitada,
+          motivo,
+          estado: StatusPurchaseOrder.EN_VALIDACION,
+        },
       });
 
       const event: PurchaseOrderCreatedEvent = {
+        organization_id,
         purchaseOrderId: created.id,
         producto_id: created.producto_id,
         cantidad_solicitada: created.cantidad_solicitada,
@@ -60,17 +68,18 @@ export class PurchaseOrdersService {
     return this.toPurchaseOrderResponse(purchaseOrder);
   }
 
-  async findAll({ page, limit, estado }: PurchaseOrderPaginationDto) {
-    const where = { estado };
+  async findAll({ organization_id, page, limit, estado }: PurchaseOrderPaginationDto) {
+    const where = { organization_id, estado };
 
-    const total = await this.prisma.purchaseOrder.count({ where });
-
-    const purchaseOrders = await this.prisma.purchaseOrder.findMany({
-      where,
-      take: limit,
-      skip: (page! - 1) * limit!,
-      orderBy: { createdAt: 'desc' },
-    });
+    const [total, purchaseOrders] = await this.prisma.withTenant(organization_id, async (tx) => [
+      await tx.purchaseOrder.count({ where }),
+      await tx.purchaseOrder.findMany({
+        where,
+        take: limit,
+        skip: (page! - 1) * limit!,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ] as const);
 
     return {
       data: purchaseOrders.map((purchaseOrder) => this.toPurchaseOrderResponse(purchaseOrder)),
@@ -82,8 +91,11 @@ export class PurchaseOrdersService {
     };
   }
 
-  async findOne(id: string) {
-    const purchaseOrder = await this.prisma.purchaseOrder.findUnique({ where: { id } });
+  // A purchase order of another organization is NOT_FOUND, like a missing one
+  async findOne(organization_id: string, id: string) {
+    const purchaseOrder = await this.prisma.withTenant(organization_id, (tx) =>
+      tx.purchaseOrder.findUnique({ where: { id, organization_id } }),
+    );
 
     if (!purchaseOrder) {
       throw new RpcException({
@@ -97,17 +109,17 @@ export class PurchaseOrdersService {
 
   // PENDIENTE -> APROBADA | RECHAZADA, APROBADA -> RECIBIDA. Receiving enqueues
   // purchase-order.received in the same transaction so products-ms adds the stock
-  async updateStatus({ id, estado, motivo }: UpdatePurchaseOrderStatusDto) {
+  async updateStatus({ organization_id, id, estado, motivo }: UpdatePurchaseOrderStatusDto) {
     const requiredStatus = STATUS_TRANSITIONS[estado];
 
-    const { purchaseOrder, received } = await this.prisma.$transaction(async (tx) => {
+    const { purchaseOrder, received } = await this.prisma.withTenant(organization_id, async (tx) => {
       // Conditional update: loses cleanly against a concurrent transition
       const { count } = await tx.purchaseOrder.updateMany({
-        where: { id, estado: requiredStatus },
+        where: { id, organization_id, estado: requiredStatus },
         data: { estado, ...(motivo !== undefined && { motivo }) },
       });
 
-      const purchaseOrder = await tx.purchaseOrder.findUnique({ where: { id } });
+      const purchaseOrder = await tx.purchaseOrder.findUnique({ where: { id, organization_id } });
 
       if (!purchaseOrder) {
         throw new RpcException({
@@ -129,6 +141,7 @@ export class PurchaseOrdersService {
       if (estado !== StatusPurchaseOrder.RECIBIDA) return { purchaseOrder, received: false };
 
       const event: PurchaseOrderReceivedEvent = {
+        organization_id,
         purchaseOrderId: id,
         producto_id: purchaseOrder.producto_id,
         cantidad: purchaseOrder.cantidad_solicitada,
@@ -146,11 +159,13 @@ export class PurchaseOrdersService {
 
   // Saga step 2 (success). Only acts while the order is EN_VALIDACION, so
   // duplicate deliveries and replies arriving after the timeout are no-ops
-  async confirmValidatedOrder({ purchaseOrderId }: PurchaseOrderProductValidatedEvent) {
-    const { count } = await this.prisma.purchaseOrder.updateMany({
-      where: { id: purchaseOrderId, estado: StatusPurchaseOrder.EN_VALIDACION },
-      data: { estado: StatusPurchaseOrder.PENDIENTE },
-    });
+  async confirmValidatedOrder({ organization_id, purchaseOrderId }: PurchaseOrderProductValidatedEvent) {
+    const { count } = await this.prisma.withTenant(organization_id, (tx) =>
+      tx.purchaseOrder.updateMany({
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.EN_VALIDACION },
+        data: { estado: StatusPurchaseOrder.PENDIENTE },
+      }),
+    );
 
     if (count === 0) {
       this.logger.warn(`Ignoring validation of purchase order #${purchaseOrderId}: it does not exist or was already processed`);
@@ -162,11 +177,13 @@ export class PurchaseOrdersService {
   }
 
   // Saga step 2 (failure). Idempotent for the same reasons as confirmValidatedOrder
-  async rejectOrder({ purchaseOrderId, reason }: PurchaseOrderProductRejectedEvent) {
-    const { count } = await this.prisma.purchaseOrder.updateMany({
-      where: { id: purchaseOrderId, estado: StatusPurchaseOrder.EN_VALIDACION },
-      data: { estado: StatusPurchaseOrder.RECHAZADA, motivo: reason },
-    });
+  async rejectOrder({ organization_id, purchaseOrderId, reason }: PurchaseOrderProductRejectedEvent) {
+    const { count } = await this.prisma.withTenant(organization_id, (tx) =>
+      tx.purchaseOrder.updateMany({
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.EN_VALIDACION },
+        data: { estado: StatusPurchaseOrder.RECHAZADA, motivo: reason },
+      }),
+    );
 
     if (count === 0) {
       this.logger.warn(`Ignoring rejection of purchase order #${purchaseOrderId}: it does not exist or was already processed`);

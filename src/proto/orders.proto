@@ -3,7 +3,10 @@ syntax = "proto3";
 package orders;
 
 // Field names are snake_case end to end (proto-loader keepCase + ts-proto
-// snakeToCamel=false) so they match the Prisma columns
+// snakeToCamel=false) so they match the Prisma columns.
+// Every request carries organization_id: the organization of the authenticated caller,
+// set by client-gateway from the token verified by auth-ms. Purchase orders of other
+// organizations are never visible (a foreign id is NOT_FOUND)
 service PurchaseOrdersService {
   rpc Create (CreatePurchaseOrderRequest) returns (PurchaseOrder);
   rpc FindAll (PurchaseOrderPaginationRequest) returns (PurchaseOrderList);
@@ -21,6 +24,7 @@ enum StatusPurchaseOrder {
 
 message PurchaseOrderById {
   string id = 1;
+  string organization_id = 2;
 }
 
 message CreatePurchaseOrderRequest {
@@ -28,12 +32,14 @@ message CreatePurchaseOrderRequest {
   string proveedor = 2;
   int32 cantidad_solicitada = 3;
   optional string motivo = 4;
+  string organization_id = 5;
 }
 
 message PurchaseOrderPaginationRequest {
   optional int32 page = 1;
   optional int32 limit = 2;
   optional StatusPurchaseOrder estado = 3;
+  string organization_id = 4;
 }
 
 // Only APROBADA, RECHAZADA (motivo required) and RECIBIDA can be requested
@@ -41,6 +47,7 @@ message UpdatePurchaseOrderStatusRequest {
   string id = 1;
   StatusPurchaseOrder estado = 2;
   optional string motivo = 3;
+  string organization_id = 4;
 }
 
 message PurchaseOrder {

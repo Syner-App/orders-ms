@@ -22,9 +22,12 @@ enum StatusPurchaseOrder {
 }
 
 // producto_id points to products-ms (another database), so it has no @relation:
-// the purchase order saga validates it
+// the purchase order saga validates it (within the same organization).
+// organization_id is the auth-ms organization (a Mongo ObjectId); the tenant_isolation RLS
+// policy only exposes the rows of the organization set by PrismaService.withTenant
 model PurchaseOrder {
   id                  String              @id @default(uuid())
+  organization_id     String              @db.VarChar(24)
   estado              StatusPurchaseOrder @default(EN_VALIDACION)
   proveedor           String              @db.VarChar
   cantidad_solicitada Int                 @db.Integer
@@ -34,12 +37,15 @@ model PurchaseOrder {
   updatedAt   DateTime? @updatedAt @db.Timestamp
   producto_id Int
 
+  @@index([organization_id, estado, createdAt])
+  // Used by expire_stale_purchase_orders (validation timeout, across organizations)
   @@index([estado, createdAt])
   @@map("ordenes_compra")
 }
 
 // Transactional outbox: events are written with the business change and
-// published to RabbitMQ by OutboxRelay
+// published to RabbitMQ by OutboxRelay. No RLS: the relay publishes every
+// organization's events, and each payload carries its organization_id
 model OutboxEvent {
   id          Int       @id @default(autoincrement())
   pattern     String

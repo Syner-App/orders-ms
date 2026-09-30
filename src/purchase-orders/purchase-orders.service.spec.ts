@@ -12,10 +12,12 @@ import { StatusPurchaseOrder } from '../generated/prisma/enums.ts';
 import { PurchaseOrderEvents } from '../common/index.ts';
 
 const purchaseOrderId = '6f1c1c9e-2f5b-4c1a-9a47-6a2b1f3c8d10';
+const organization_id = '6abd26a42d059ac027376ca1';
 const now = new Date('2026-09-28T12:00:00.000Z');
 
 const buildPurchaseOrder = (overrides: Record<string, unknown> = {}) => ({
   id: purchaseOrderId,
+  organization_id,
   estado: StatusPurchaseOrder.EN_VALIDACION,
   proveedor: 'Lácteos del Valle',
   cantidad_solicitada: 40,
@@ -37,15 +39,15 @@ describe('PurchaseOrdersService', () => {
       findUnique: vi.fn(),
       updateMany: vi.fn(),
     },
-    $transaction: vi.fn(),
+    withTenant: vi.fn(),
   };
   const outbox = { enqueue: vi.fn() };
   const outboxRelay = { kick: vi.fn() };
 
   beforeEach(async () => {
     vi.resetAllMocks();
-    // Interactive transactions run the callback against the same mocked client
-    prisma.$transaction.mockImplementation((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+    // Tenant transactions run the callback against the same mocked client
+    prisma.withTenant.mockImplementation((_organizationId: string, fn: (tx: typeof prisma) => unknown) => fn(prisma));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -63,10 +65,12 @@ describe('PurchaseOrdersService', () => {
     it('stores the order EN_VALIDACION and enqueues purchase-order.created in the same transaction', async () => {
       prisma.purchaseOrder.create.mockResolvedValue(buildPurchaseOrder());
 
-      const result = await service.create({ producto_id: 4, proveedor: 'Lácteos del Valle', cantidad_solicitada: 40 });
+      const result = await service.create({ organization_id, producto_id: 4, proveedor: 'Lácteos del Valle', cantidad_solicitada: 40 });
 
+      expect(prisma.withTenant).toHaveBeenCalledWith(organization_id, expect.any(Function));
       expect(prisma.purchaseOrder.create).toHaveBeenCalledWith({
         data: {
+          organization_id,
           producto_id: 4,
           proveedor: 'Lácteos del Valle',
           cantidad_solicitada: 40,
@@ -75,6 +79,7 @@ describe('PurchaseOrdersService', () => {
         },
       });
       expect(outbox.enqueue).toHaveBeenCalledWith(prisma, PurchaseOrderEvents.Created, {
+        organization_id,
         purchaseOrderId,
         producto_id: 4,
         cantidad_solicitada: 40,
@@ -90,11 +95,12 @@ describe('PurchaseOrdersService', () => {
   });
 
   describe('findOne', () => {
-    it('throws NOT_FOUND for a missing order', async () => {
+    it('throws NOT_FOUND for a missing order or one of another organization', async () => {
       prisma.purchaseOrder.findUnique.mockResolvedValue(null);
 
-      const error = await service.findOne(purchaseOrderId).catch((e: unknown) => e);
+      const error = await service.findOne(organization_id, purchaseOrderId).catch((e: unknown) => e);
 
+      expect(prisma.purchaseOrder.findUnique).toHaveBeenCalledWith({ where: { id: purchaseOrderId, organization_id } });
       expect((error as RpcException).getError()).toMatchObject({ code: status.NOT_FOUND });
     });
   });
@@ -104,10 +110,10 @@ describe('PurchaseOrdersService', () => {
       prisma.purchaseOrder.updateMany.mockResolvedValue({ count: 1 });
       prisma.purchaseOrder.findUnique.mockResolvedValue(buildPurchaseOrder({ estado: StatusPurchaseOrder.APROBADA }));
 
-      const result = await service.updateStatus({ id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA });
+      const result = await service.updateStatus({ organization_id, id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA });
 
       expect(prisma.purchaseOrder.updateMany).toHaveBeenCalledWith({
-        where: { id: purchaseOrderId, estado: StatusPurchaseOrder.PENDIENTE },
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.PENDIENTE },
         data: { estado: StatusPurchaseOrder.APROBADA },
       });
       expect(outbox.enqueue).not.toHaveBeenCalled();
@@ -121,13 +127,14 @@ describe('PurchaseOrdersService', () => {
       );
 
       await service.updateStatus({
+        organization_id,
         id: purchaseOrderId,
         estado: StatusPurchaseOrder.RECHAZADA,
         motivo: 'Precio fuera de presupuesto',
       });
 
       expect(prisma.purchaseOrder.updateMany).toHaveBeenCalledWith({
-        where: { id: purchaseOrderId, estado: StatusPurchaseOrder.PENDIENTE },
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.PENDIENTE },
         data: { estado: StatusPurchaseOrder.RECHAZADA, motivo: 'Precio fuera de presupuesto' },
       });
     });
@@ -136,13 +143,14 @@ describe('PurchaseOrdersService', () => {
       prisma.purchaseOrder.updateMany.mockResolvedValue({ count: 1 });
       prisma.purchaseOrder.findUnique.mockResolvedValue(buildPurchaseOrder({ estado: StatusPurchaseOrder.RECIBIDA }));
 
-      await service.updateStatus({ id: purchaseOrderId, estado: StatusPurchaseOrder.RECIBIDA });
+      await service.updateStatus({ organization_id, id: purchaseOrderId, estado: StatusPurchaseOrder.RECIBIDA });
 
       expect(prisma.purchaseOrder.updateMany).toHaveBeenCalledWith({
-        where: { id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA },
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.APROBADA },
         data: { estado: StatusPurchaseOrder.RECIBIDA },
       });
       expect(outbox.enqueue).toHaveBeenCalledWith(prisma, PurchaseOrderEvents.Received, {
+        organization_id,
         purchaseOrderId,
         producto_id: 4,
         cantidad: 40,
@@ -155,7 +163,7 @@ describe('PurchaseOrdersService', () => {
       prisma.purchaseOrder.findUnique.mockResolvedValue(buildPurchaseOrder({ estado: StatusPurchaseOrder.RECIBIDA }));
 
       const error = await service
-        .updateStatus({ id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA })
+        .updateStatus({ organization_id, id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA })
         .catch((e: unknown) => e);
 
       expect((error as RpcException).getError()).toMatchObject({ code: status.FAILED_PRECONDITION });
@@ -167,7 +175,7 @@ describe('PurchaseOrdersService', () => {
       prisma.purchaseOrder.findUnique.mockResolvedValue(buildPurchaseOrder());
 
       const error = await service
-        .updateStatus({ id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA })
+        .updateStatus({ organization_id, id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA })
         .catch((e: unknown) => e);
 
       expect((error as RpcException).getError()).toMatchObject({ code: status.FAILED_PRECONDITION });
@@ -177,7 +185,7 @@ describe('PurchaseOrdersService', () => {
       prisma.purchaseOrder.updateMany.mockResolvedValue({ count: 0 });
       prisma.purchaseOrder.findUnique.mockResolvedValue(buildPurchaseOrder({ estado: StatusPurchaseOrder.RECIBIDA }));
 
-      await service.updateStatus({ id: purchaseOrderId, estado: StatusPurchaseOrder.RECIBIDA });
+      await service.updateStatus({ organization_id, id: purchaseOrderId, estado: StatusPurchaseOrder.RECIBIDA });
 
       expect(outbox.enqueue).not.toHaveBeenCalled();
       expect(outboxRelay.kick).not.toHaveBeenCalled();
@@ -188,7 +196,7 @@ describe('PurchaseOrdersService', () => {
       prisma.purchaseOrder.findUnique.mockResolvedValue(null);
 
       const error = await service
-        .updateStatus({ id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA })
+        .updateStatus({ organization_id, id: purchaseOrderId, estado: StatusPurchaseOrder.APROBADA })
         .catch((e: unknown) => e);
 
       expect((error as RpcException).getError()).toMatchObject({ code: status.NOT_FOUND });
@@ -200,19 +208,23 @@ describe('PurchaseOrdersService', () => {
       (await validate(plainToInstance(UpdatePurchaseOrderStatusDto, payload))).map((error) => error.property);
 
     it('requires motivo when estado is RECHAZADA', async () => {
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'RECHAZADA' })).resolves.toEqual(['motivo']);
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'RECHAZADA', motivo: '' })).resolves.toEqual(['motivo']);
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'RECHAZADA', motivo: 'Sin presupuesto' })).resolves.toEqual([]);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'RECHAZADA' })).resolves.toEqual(['motivo']);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'RECHAZADA', motivo: '' })).resolves.toEqual(['motivo']);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'RECHAZADA', motivo: 'Sin presupuesto' })).resolves.toEqual([]);
     });
 
     it('does not require motivo for the other estados', async () => {
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'APROBADA' })).resolves.toEqual([]);
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'RECIBIDA' })).resolves.toEqual([]);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'APROBADA' })).resolves.toEqual([]);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'RECIBIDA' })).resolves.toEqual([]);
+    });
+
+    it('requires the organization_id', async () => {
+      await expect(errorsFor({ id: purchaseOrderId, estado: 'APROBADA' })).resolves.toEqual(['organization_id']);
     });
 
     it('rejects the estados owned by the saga', async () => {
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'EN_VALIDACION' })).resolves.toEqual(['estado']);
-      await expect(errorsFor({ id: purchaseOrderId, estado: 'PENDIENTE' })).resolves.toEqual(['estado']);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'EN_VALIDACION' })).resolves.toEqual(['estado']);
+      await expect(errorsFor({ organization_id, id: purchaseOrderId, estado: 'PENDIENTE' })).resolves.toEqual(['estado']);
     });
   });
 
@@ -220,10 +232,10 @@ describe('PurchaseOrdersService', () => {
     it('confirmValidatedOrder moves EN_VALIDACION to PENDIENTE', async () => {
       prisma.purchaseOrder.updateMany.mockResolvedValue({ count: 1 });
 
-      await expect(service.confirmValidatedOrder({ purchaseOrderId, producto_id: 4 })).resolves.toBe(true);
+      await expect(service.confirmValidatedOrder({ organization_id, purchaseOrderId, producto_id: 4 })).resolves.toBe(true);
 
       expect(prisma.purchaseOrder.updateMany).toHaveBeenCalledWith({
-        where: { id: purchaseOrderId, estado: StatusPurchaseOrder.EN_VALIDACION },
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.EN_VALIDACION },
         data: { estado: StatusPurchaseOrder.PENDIENTE },
       });
     });
@@ -231,16 +243,16 @@ describe('PurchaseOrdersService', () => {
     it('confirmValidatedOrder ignores an order that already left EN_VALIDACION', async () => {
       prisma.purchaseOrder.updateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.confirmValidatedOrder({ purchaseOrderId, producto_id: 4 })).resolves.toBe(false);
+      await expect(service.confirmValidatedOrder({ organization_id, purchaseOrderId, producto_id: 4 })).resolves.toBe(false);
     });
 
     it('rejectOrder stores the reason as motivo', async () => {
       prisma.purchaseOrder.updateMany.mockResolvedValue({ count: 1 });
 
-      await expect(service.rejectOrder({ purchaseOrderId, reason: 'Product #4 not found or inactive' })).resolves.toBe(true);
+      await expect(service.rejectOrder({ organization_id, purchaseOrderId, reason: 'Product #4 not found or inactive' })).resolves.toBe(true);
 
       expect(prisma.purchaseOrder.updateMany).toHaveBeenCalledWith({
-        where: { id: purchaseOrderId, estado: StatusPurchaseOrder.EN_VALIDACION },
+        where: { id: purchaseOrderId, organization_id, estado: StatusPurchaseOrder.EN_VALIDACION },
         data: { estado: StatusPurchaseOrder.RECHAZADA, motivo: 'Product #4 not found or inactive' },
       });
     });

@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsString, IsUUID, ValidateIf } from 'class-validator';
+import { IsIn, IsMongoId, IsNotEmpty, IsString, IsUUID, ValidateIf } from 'class-validator';
 import { StatusPurchaseOrder } from '../../generated/prisma/enums.ts';
 
 // EN_VALIDACION and PENDIENTE are set by the purchase order saga only
@@ -11,6 +11,10 @@ export const UPDATABLE_PURCHASE_ORDER_STATUSES = [
 export type UpdatablePurchaseOrderStatus = (typeof UPDATABLE_PURCHASE_ORDER_STATUSES)[number];
 
 export class UpdatePurchaseOrderStatusDto {
+  // Organization of the authenticated caller, set by client-gateway from the verified token
+  @IsMongoId()
+  public organization_id: string;
+
   @IsUUID(4)
   public id: string;
 

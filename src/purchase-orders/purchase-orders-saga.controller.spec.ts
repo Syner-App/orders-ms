@@ -5,6 +5,7 @@ import { PurchaseOrdersService } from './purchase-orders.service.ts';
 import { PurchaseOrderEvents } from '../common/index.ts';
 
 const purchaseOrderId = '6f1c1c9e-2f5b-4c1a-9a47-6a2b1f3c8d10';
+const organization_id = '6abd26a42d059ac027376ca1';
 
 function createContext(pattern: string) {
   const channel = { ack: vi.fn(), nack: vi.fn() };
@@ -30,7 +31,7 @@ describe('PurchaseOrdersSagaController', () => {
   it('confirms the order and acks purchase-order.product.validated', async () => {
     purchaseOrdersService.confirmValidatedOrder.mockResolvedValue(true);
     const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
-    const payload = { purchaseOrderId, producto_id: 1 };
+    const payload = { organization_id, purchaseOrderId, producto_id: 1 };
 
     await controller.handleProductValidated(payload, context);
 
@@ -42,7 +43,7 @@ describe('PurchaseOrdersSagaController', () => {
     purchaseOrdersService.confirmValidatedOrder.mockResolvedValue(false);
     const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
 
-    await controller.handleProductValidated({ purchaseOrderId, producto_id: 1 }, context);
+    await controller.handleProductValidated({ organization_id, purchaseOrderId, producto_id: 1 }, context);
 
     expect(channel.ack).toHaveBeenCalledWith(message);
   });
@@ -51,19 +52,29 @@ describe('PurchaseOrdersSagaController', () => {
     purchaseOrdersService.rejectOrder.mockResolvedValue(true);
     const { channel, message, context } = createContext(PurchaseOrderEvents.ProductRejected);
 
-    await controller.handleProductRejected({ purchaseOrderId, reason: 'Product #9 not found or inactive' }, context);
+    await controller.handleProductRejected({ organization_id, purchaseOrderId, reason: 'Product #9 not found or inactive' }, context);
 
     expect(purchaseOrdersService.rejectOrder).toHaveBeenCalledWith({
+      organization_id,
       purchaseOrderId,
       reason: 'Product #9 not found or inactive',
     });
     expect(channel.ack).toHaveBeenCalledWith(message);
   });
 
+  it('dead-letters a reply without organization_id', async () => {
+    const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
+
+    await controller.handleProductValidated({ purchaseOrderId, producto_id: 1 }, context);
+
+    expect(purchaseOrdersService.confirmValidatedOrder).not.toHaveBeenCalled();
+    expect(channel.nack).toHaveBeenCalledWith(message, false, false);
+  });
+
   it('dead-letters an invalid payload without calling the service', async () => {
     const { channel, message, context } = createContext(PurchaseOrderEvents.ProductValidated);
 
-    await controller.handleProductValidated({ purchaseOrderId, producto_id: 'x' }, context);
+    await controller.handleProductValidated({ organization_id, purchaseOrderId, producto_id: 'x' }, context);
 
     expect(purchaseOrdersService.confirmValidatedOrder).not.toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(message, false, false);
@@ -73,7 +84,7 @@ describe('PurchaseOrdersSagaController', () => {
     purchaseOrdersService.rejectOrder.mockRejectedValue(new Error('db down'));
     const { channel, message, context } = createContext(PurchaseOrderEvents.ProductRejected);
 
-    await controller.handleProductRejected({ purchaseOrderId, reason: 'nope' }, context);
+    await controller.handleProductRejected({ organization_id, purchaseOrderId, reason: 'nope' }, context);
 
     expect(channel.ack).not.toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(message, false, false);

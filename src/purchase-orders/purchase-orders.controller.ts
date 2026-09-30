@@ -24,8 +24,8 @@ export class PurchaseOrdersController {
   }
 
   @GrpcMethod(PURCHASE_ORDERS_SERVICE_NAME, 'FindOne')
-  findOne(@Payload() { id }: PurchaseOrderByIdDto) {
-    return this.purchaseOrdersService.findOne(id);
+  findOne(@Payload() { organization_id, id }: PurchaseOrderByIdDto) {
+    return this.purchaseOrdersService.findOne(organization_id, id);
   }
 
   @GrpcMethod(PURCHASE_ORDERS_SERVICE_NAME, 'UpdateStatus')

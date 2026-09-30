@@ -1,12 +1,13 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.ts';
-import { StatusPurchaseOrder } from '../generated/prisma/enums.ts';
 import { envs } from '../config/envs.ts';
 
 export const VALIDATION_TIMEOUT_REASON = 'Product validation timed out';
 
 // Purchase order saga timeout: rejects orders stuck in EN_VALIDACION (e.g. products-ms
-// down for too long). A late validation reply is then ignored by PurchaseOrdersService
+// down for too long). A late validation reply is then ignored by PurchaseOrdersService.
+// It spans every organization, which RLS forbids to the service's own role, so it goes
+// through the SECURITY DEFINER function expire_stale_purchase_orders (multitenancy migration)
 @Injectable()
 export class PurchaseOrderValidationTimeoutJob implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(PurchaseOrderValidationTimeoutJob.name);
@@ -28,13 +29,9 @@ export class PurchaseOrderValidationTimeoutJob implements OnApplicationBootstrap
 
     this.running = true;
     try {
-      const { count } = await this.prisma.purchaseOrder.updateMany({
-        where: {
-          estado: StatusPurchaseOrder.EN_VALIDACION,
-          createdAt: { lt: new Date(now.getTime() - envs.orderValidationTimeoutMs) },
-        },
-        data: { estado: StatusPurchaseOrder.RECHAZADA, motivo: VALIDATION_TIMEOUT_REASON },
-      });
+      const cutoff = new Date(now.getTime() - envs.orderValidationTimeoutMs);
+      const [{ count }] = await this.prisma.$queryRaw<[{ count: number }]>`
+        SELECT expire_stale_purchase_orders(${cutoff}::timestamp, ${VALIDATION_TIMEOUT_REASON}) AS count`;
 
       if (count) this.logger.warn(`Rejected ${count} purchase order(s) awaiting validation for too long`);
       return count;
