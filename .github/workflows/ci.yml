@@ -41,7 +41,7 @@ jobs:
         with:
           # DOCKERHUB_NAMESPACE (variable) overrides the user when the images
           # live under a Docker Hub organization
-          images: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME || 'local' }}/${{ env.IMAGE_NAME }}
+          images: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           tags: |
             type=sha,prefix=sha-
             type=ref,event=pr,prefix=pr-
