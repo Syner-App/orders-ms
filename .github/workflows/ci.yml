@@ -1,5 +1,6 @@
-# Builds the production image (Dockerfile.prod, target prod) on every pull
-# request and push to main. The tests run inside the image build, so a failing
+# Builds the production image (Dockerfile.prod, target prod) and the migration
+# image (target migrate, published as syner-<service>-migrate; the Helm migration
+# Jobs run it) on every pull request and push to main. The tests run inside the image build, so a failing
 # test fails the job. Each platform builds on a native runner (no QEMU), is
 # pushed by digest, and the merge job joins them into a single multi-arch tag
 # on Docker Hub. Fork pull requests get no secrets, so they only build.
@@ -23,6 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        target: [prod, migrate]
+        platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
@@ -34,7 +37,7 @@ jobs:
       PUBLISH: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
       # DOCKERHUB_NAMESPACE (variable) overrides the user when the images
       # live under a Docker Hub organization
-      REGISTRY_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/syner-orders-ms
+      REGISTRY_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/syner-orders-ms${{ matrix.target == 'migrate' && '-migrate' || '' }}
     steps:
       - name: Prepare
         run: |
@@ -64,13 +67,13 @@ jobs:
         with:
           context: .
           file: Dockerfile.prod
-          target: prod
+          target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           # Pushes an untagged image per platform; the merge job tags them
           outputs: ${{ env.PUBLISH == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY_IMAGE) || 'type=cacheonly' }}
-          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,scope=${{ env.PLATFORM_PAIR }},mode=max
+          cache-from: type=gha,scope=${{ matrix.target == 'prod' && env.PLATFORM_PAIR || format('migrate-{0}', env.PLATFORM_PAIR) }}
+          cache-to: type=gha,scope=${{ matrix.target == 'prod' && env.PLATFORM_PAIR || format('migrate-{0}', env.PLATFORM_PAIR) }},mode=max
 
       - name: Export digest
         if: env.PUBLISH == 'true'
@@ -83,24 +86,27 @@ jobs:
         if: env.PUBLISH == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ env.PLATFORM_PAIR }}
+          name: digests-${{ matrix.target }}-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  # Joins the per-platform digests into one manifest list and tags it
+  # Joins the per-platform digests of each image into one manifest list and tags it
   merge:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     needs: build
+    strategy:
+      matrix:
+        target: [prod, migrate]
     runs-on: ubuntu-latest
     env:
-      REGISTRY_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/syner-orders-ms
+      REGISTRY_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/syner-orders-ms${{ matrix.target == 'migrate' && '-migrate' || '' }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-${{ matrix.target }}-*
           merge-multiple: true
 
       - name: Log in to Docker Hub
