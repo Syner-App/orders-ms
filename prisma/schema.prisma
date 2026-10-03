@@ -36,6 +36,9 @@ model PurchaseOrder {
   createdAt   DateTime  @default(now()) @db.Timestamp
   updatedAt   DateTime? @updatedAt @db.Timestamp
   producto_id Int
+  // Low stock alert (products-ms) that opened this order automatically; unique so a
+  // redelivered alert.created never creates a second order
+  alert_id    String?   @unique @db.Uuid
 
   @@index([organization_id, estado, createdAt])
   // Used by expire_stale_purchase_orders (validation timeout, across organizations)

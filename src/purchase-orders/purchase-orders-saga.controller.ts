@@ -3,6 +3,8 @@ import { Ctx, EventPattern, Payload, RmqContext, Transport } from '@nestjs/micro
 import type { ClassConstructor } from 'class-transformer';
 import { PurchaseOrdersService } from './purchase-orders.service.ts';
 import {
+  AlertCreatedEvent,
+  AlertEvents,
   parseEvent,
   PurchaseOrderEvents,
   PurchaseOrderProductRejectedEvent,
@@ -10,7 +12,7 @@ import {
   rmqMessage,
 } from '../common/index.ts';
 
-// Purchase order saga replies from products-ms. Handlers are idempotent, so a
+// Purchase order saga replies and stock alerts from products-ms. Handlers are idempotent, so a
 // redelivered message is simply acked again
 @Controller()
 export class PurchaseOrdersSagaController {
@@ -29,6 +31,13 @@ export class PurchaseOrdersSagaController {
   handleProductRejected(@Payload() payload: unknown, @Ctx() context: RmqContext) {
     return this.process(PurchaseOrderEvents.ProductRejected, PurchaseOrderProductRejectedEvent, payload, context,
       (event) => this.purchaseOrdersService.rejectOrder(event));
+  }
+
+  // Low stock alerts from products-ms open a purchase order automatically
+  @EventPattern<string>(AlertEvents.Created, Transport.RMQ)
+  handleAlertCreated(@Payload() payload: unknown, @Ctx() context: RmqContext) {
+    return this.process(AlertEvents.Created, AlertCreatedEvent, payload, context,
+      (event) => this.purchaseOrdersService.createFromLowStockAlert(event));
   }
 
   // Invalid payloads and processing errors are dead-lettered (orders.saga-replies.dlq)

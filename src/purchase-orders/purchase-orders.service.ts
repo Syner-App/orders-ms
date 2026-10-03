@@ -9,11 +9,13 @@ import {
 } from './dto/index.ts';
 import { PrismaService } from '../prisma/prisma.service.ts';
 import { StatusPurchaseOrder } from '../generated/prisma/enums.ts';
-import type { PurchaseOrder } from '../generated/prisma/client.ts';
+import type { Prisma, PurchaseOrder } from '../generated/prisma/client.ts';
 import { OutboxService } from '../outbox/outbox.service.ts';
 import { OutboxRelay } from '../outbox/outbox.relay.ts';
 import {
+  LOW_STOCK_ALERT,
   PurchaseOrderEvents,
+  type AlertCreatedEvent,
   type PurchaseOrderCreatedEvent,
   type PurchaseOrderProductRejectedEvent,
   type PurchaseOrderProductValidatedEvent,
@@ -26,6 +28,14 @@ const STATUS_TRANSITIONS: Record<UpdatablePurchaseOrderStatus, StatusPurchaseOrd
   [StatusPurchaseOrder.RECHAZADA]: StatusPurchaseOrder.PENDIENTE,
   [StatusPurchaseOrder.RECIBIDA]: StatusPurchaseOrder.APROBADA,
 };
+
+// Orders still on their way: a new low stock alert does not open another one for the product
+const OPEN_STATUSES = [StatusPurchaseOrder.EN_VALIDACION, StatusPurchaseOrder.PENDIENTE, StatusPurchaseOrder.APROBADA];
+
+// Automatic orders restock twice the minimum
+const lowStockOrderQuantity = (stock_minimo: number) => Math.max(1, stock_minimo * 2);
+
+type NewPurchaseOrder = Omit<Prisma.PurchaseOrderUncheckedCreateInput, 'estado'>;
 
 @Injectable()
 export class PurchaseOrdersService {
@@ -40,32 +50,49 @@ export class PurchaseOrdersService {
   // Saga step 1: persist the order EN_VALIDACION and announce it. products-ms answers
   // asynchronously with purchase-order.product.validated / purchase-order.product.rejected
   async create({ organization_id, producto_id, proveedor, cantidad_solicitada, motivo }: CreatePurchaseOrderDto) {
-    const purchaseOrder = await this.prisma.withTenant(organization_id, async (tx) => {
-      const created = await tx.purchaseOrder.create({
-        data: {
-          organization_id,
-          producto_id,
-          proveedor,
-          cantidad_solicitada,
-          motivo,
-          estado: StatusPurchaseOrder.EN_VALIDACION,
-        },
-      });
-
-      const event: PurchaseOrderCreatedEvent = {
-        organization_id,
-        purchaseOrderId: created.id,
-        producto_id: created.producto_id,
-        cantidad_solicitada: created.cantidad_solicitada,
-      };
-      await this.outbox.enqueue(tx, PurchaseOrderEvents.Created, { ...event });
-
-      return created;
-    });
+    const purchaseOrder = await this.prisma.withTenant(organization_id, (tx) =>
+      this.createInTx(tx, { organization_id, producto_id, proveedor, cantidad_solicitada, motivo }),
+    );
 
     this.outboxRelay.kick();
 
     return this.toPurchaseOrderResponse(purchaseOrder);
+  }
+
+  // A new low stock alert opens a purchase order through the same saga as create().
+  // Idempotent: a redelivered alert (alert_id is unique) or a product that already has an
+  // open order creates nothing
+  async createFromLowStockAlert({ organization_id, alert, product }: AlertCreatedEvent) {
+    if (alert.tipo !== LOW_STOCK_ALERT) return null;
+
+    const purchaseOrder = await this.prisma.withTenant(organization_id, async (tx) => {
+      const existing = await tx.purchaseOrder.findFirst({
+        where: {
+          organization_id,
+          OR: [{ alert_id: alert.id }, { producto_id: alert.product_id, estado: { in: OPEN_STATUSES } }],
+        },
+        select: { id: true },
+      });
+      if (existing) return null;
+
+      return this.createInTx(tx, {
+        organization_id,
+        producto_id: alert.product_id,
+        proveedor: product.proveedor,
+        cantidad_solicitada: lowStockOrderQuantity(product.stock_minimo),
+        motivo: `Generada automáticamente: ${alert.descripcion}`,
+        alert_id: alert.id,
+      });
+    });
+
+    if (!purchaseOrder) {
+      this.logger.log(`Low stock alert ${alert.id}: product #${alert.product_id} already has an open purchase order`);
+      return null;
+    }
+
+    this.outboxRelay.kick();
+    this.logger.log(`Purchase order #${purchaseOrder.id} opened from low stock alert ${alert.id}`);
+    return purchaseOrder;
   }
 
   async findAll({ organization_id, page, limit, estado }: PurchaseOrderPaginationDto) {
@@ -192,6 +219,23 @@ export class PurchaseOrdersService {
 
     this.logger.log(`Purchase order #${purchaseOrderId} rejected: ${reason}`);
     return true;
+  }
+
+  // Persists the order EN_VALIDACION and enqueues purchase-order.created in the caller's transaction
+  private async createInTx(tx: Prisma.TransactionClient, data: NewPurchaseOrder) {
+    const created = await tx.purchaseOrder.create({
+      data: { ...data, estado: StatusPurchaseOrder.EN_VALIDACION },
+    });
+
+    const event: PurchaseOrderCreatedEvent = {
+      organization_id: created.organization_id,
+      purchaseOrderId: created.id,
+      producto_id: created.producto_id,
+      cantidad_solicitada: created.cantidad_solicitada,
+    };
+    await this.outbox.enqueue(tx, PurchaseOrderEvents.Created, { ...event });
+
+    return created;
   }
 
   // proto-loader cannot serialize Date objects, so dates travel as ISO-8601 strings.

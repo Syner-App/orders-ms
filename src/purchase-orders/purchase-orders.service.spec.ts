@@ -34,6 +34,7 @@ describe('PurchaseOrdersService', () => {
   const prisma = {
     purchaseOrder: {
       create: vi.fn(),
+      findFirst: vi.fn(),
       count: vi.fn(),
       findMany: vi.fn(),
       findUnique: vi.fn(),
@@ -91,6 +92,75 @@ describe('PurchaseOrdersService', () => {
         createdAt: now.toISOString(),
         updatedAt: undefined,
       });
+    });
+  });
+
+  describe('createFromLowStockAlert', () => {
+    const alertId = '0b8e2f6a-3c1d-4e5f-8a9b-1c2d3e4f5a6b';
+    const event = {
+      organization_id,
+      alert: { id: alertId, product_id: 4, tipo: 'STOCK_BAJO', descripcion: 'Stock bajo: Yogur Natural 500g' },
+      product: { proveedor: 'Lácteos del Valle', stock_minimo: 25 },
+    };
+
+    it('opens an order for twice the minimum stock through the saga', async () => {
+      prisma.purchaseOrder.findFirst.mockResolvedValue(null);
+      prisma.purchaseOrder.create.mockResolvedValue(buildPurchaseOrder({ cantidad_solicitada: 50, alert_id: alertId }));
+
+      await service.createFromLowStockAlert(event);
+
+      expect(prisma.purchaseOrder.findFirst).toHaveBeenCalledWith({
+        where: {
+          organization_id,
+          OR: [
+            { alert_id: alertId },
+            {
+              producto_id: 4,
+              estado: { in: [StatusPurchaseOrder.EN_VALIDACION, StatusPurchaseOrder.PENDIENTE, StatusPurchaseOrder.APROBADA] },
+            },
+          ],
+        },
+        select: { id: true },
+      });
+      expect(prisma.purchaseOrder.create).toHaveBeenCalledWith({
+        data: {
+          organization_id,
+          producto_id: 4,
+          proveedor: 'Lácteos del Valle',
+          cantidad_solicitada: 50,
+          motivo: 'Generada automáticamente: Stock bajo: Yogur Natural 500g',
+          alert_id: alertId,
+          estado: StatusPurchaseOrder.EN_VALIDACION,
+        },
+      });
+      expect(outbox.enqueue).toHaveBeenCalledWith(prisma, PurchaseOrderEvents.Created, expect.objectContaining({ cantidad_solicitada: 50 }));
+      expect(outboxRelay.kick).toHaveBeenCalled();
+    });
+
+    it('orders at least one unit when the minimum stock is 0', async () => {
+      prisma.purchaseOrder.findFirst.mockResolvedValue(null);
+      prisma.purchaseOrder.create.mockResolvedValue(buildPurchaseOrder({ cantidad_solicitada: 1 }));
+
+      await service.createFromLowStockAlert({ ...event, product: { ...event.product, stock_minimo: 0 } });
+
+      expect(prisma.purchaseOrder.create).toHaveBeenCalledWith({ data: expect.objectContaining({ cantidad_solicitada: 1 }) });
+    });
+
+    it('creates nothing when the product already has an open order or the alert was processed', async () => {
+      prisma.purchaseOrder.findFirst.mockResolvedValue({ id: purchaseOrderId });
+
+      const result = await service.createFromLowStockAlert(event);
+
+      expect(result).toBeNull();
+      expect(prisma.purchaseOrder.create).not.toHaveBeenCalled();
+      expect(outboxRelay.kick).not.toHaveBeenCalled();
+    });
+
+    it('ignores alerts that are not STOCK_BAJO', async () => {
+      const result = await service.createFromLowStockAlert({ ...event, alert: { ...event.alert, tipo: 'OTRA' } });
+
+      expect(result).toBeNull();
+      expect(prisma.withTenant).not.toHaveBeenCalled();
     });
   });
 
